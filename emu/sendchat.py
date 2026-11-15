@@ -10,5 +10,8 @@ try:
     s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
 except OSError as e:
     sys.exit("no host on 127.0.0.1:%s (%s): start it with --gui-port %s" % (sys.argv[1], e, sys.argv[1]))
+tok = __import__("os").environ.get("PICTOCHAT_TOKEN")      # host started with --gui-token: authenticate first
+if tok:
+    s.sendall((json.dumps({"cmd": "auth", "token": tok}) + "\n").encode())
 s.sendall((json.dumps({"cmd": "chat", "pixels": pixels}) + "\n").encode()); s.close()
 print("sent")

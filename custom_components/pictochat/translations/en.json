@@ -1,0 +1,159 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to the PictoChat host",
+        "description": "The host is pictochat.py, running on the machine that has the ESP32-C3 radio plugged in. Start it with --gui-bind 0.0.0.0 and a token so Home Assistant can reach it.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Token"
+        },
+        "data_description": {
+          "host": "Name or IP address of the machine that runs the host. From a container on the same Mac, host.docker.internal usually works.",
+          "token": "The token the host was started with (--gui-token). Leave empty if it has none."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "No PictoChat host answered there. Check that it runs, the address, the port and the firewall.",
+      "invalid_auth": "The host refused the token."
+    },
+    "abort": {
+      "already_configured": "This host is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PictoChat phrases",
+        "menu_options": {
+          "add_phrase": "Learn a phrase from the last DS message",
+          "edit_phrase": "Edit a phrase",
+          "remove_phrase": "Remove phrases",
+          "settings": "Settings"
+        }
+      },
+      "add_phrase": {
+        "title": "Learn a phrase",
+        "description": "The last message came from {sender}, {ago} seconds ago. It becomes the sample for this phrase: whenever a DS sends the same message again, the phrase fires.\n\nGive it a name that is already in use to add this message as one more sample of that phrase (the other fields are then ignored).",
+        "data": {
+          "name": "Name",
+          "targets": "Run on these entities (optional)",
+          "action": "Action",
+          "reply": "Answer on the DS (optional)"
+        },
+        "data_description": {
+          "name": "What you typed on the DS, for example: lights on",
+          "targets": "Leave empty to only fire the event and device trigger, and build an automation on that.",
+          "action": "Scenes are always activated and buttons always pressed.",
+          "reply": "Text sent back into the room after the action ran."
+        }
+      },
+      "edit_phrase": {
+        "title": "Edit a phrase",
+        "data": {
+          "phrase": "Phrase"
+        }
+      },
+      "edit_details": {
+        "title": "Edit {name}",
+        "description": "This phrase has {samples} learned sample(s).",
+        "data": {
+          "name": "Name",
+          "targets": "Run on these entities (optional)",
+          "action": "Action",
+          "reply": "Answer on the DS (optional)"
+        }
+      },
+      "remove_phrase": {
+        "title": "Remove phrases",
+        "data": {
+          "phrases": "Phrases to remove"
+        }
+      },
+      "settings": {
+        "title": "Settings",
+        "data": {
+          "threshold": "How exactly a message must match",
+          "unknown_reply": "Answer on the DS when nothing matched (optional)"
+        },
+        "data_description": {
+          "threshold": "Typed text always matches 100 %. Lower this only to recognise hand-drawn messages, which never come out the same twice."
+        }
+      }
+    },
+    "error": {
+      "name_required": "Give the phrase a name.",
+      "name_exists": "Another phrase already has this name.",
+      "already_matches": "This message is already recognised as the phrase \"{match}\"."
+    },
+    "abort": {
+      "no_message": "No message has arrived from a DS yet. Send the message from your DS first, then come back here.",
+      "empty_message": "The last message is empty.",
+      "unknown_phrase": "That phrase no longer exists."
+    }
+  },
+  "selector": {
+    "action": {
+      "options": {
+        "toggle": "Toggle",
+        "turn_on": "Turn on",
+        "turn_off": "Turn off"
+      }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "phrase": "Phrase \"{subtype}\" received",
+      "unknown": "Unrecognised message received"
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "ds_in_room": { "name": "DS in room" }
+    },
+    "sensor": {
+      "last_phrase": { "name": "Last phrase" },
+      "signal": { "name": "DS signal" }
+    },
+    "image": {
+      "last_message": { "name": "Last message" }
+    },
+    "event": {
+      "message": {
+        "name": "Message",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "phrase": "Phrase recognised",
+              "unknown": "Not recognised"
+            }
+          }
+        }
+      }
+    },
+    "notify": {
+      "room": { "name": "Room" }
+    }
+  },
+  "services": {
+    "send_text": {
+      "name": "Send text",
+      "description": "Sends a text into the PictoChat room. Long texts are split over up to three messages.",
+      "fields": {
+        "message": { "name": "Message", "description": "The text to show on the DS." },
+        "color": { "name": "Colour", "description": "Ink colour, 1 (black) to 15 (PictoChat's rainbow colours)." }
+      }
+    },
+    "send_image": {
+      "name": "Send image",
+      "description": "Sends an image file into the PictoChat room, fitted to 230 x 64 pixels.",
+      "fields": {
+        "path": { "name": "Path", "description": "Image file on the Home Assistant machine, inside allowlist_external_dirs." },
+        "dither": { "name": "Dither", "description": "Floyd-Steinberg dithering instead of a plain threshold." },
+        "color": { "name": "Colour", "description": "Use PictoChat's 16 colours instead of black and white." }
+      }
+    }
+  }
+}

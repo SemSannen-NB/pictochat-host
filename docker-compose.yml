@@ -1,0 +1,24 @@
+# PictoChat dashboard, host and ESP32-C3 flasher as one container. Works as a Coolify "Docker Compose" resource.
+# Open the dashboard on port 8080. The ESP32-C3 must be plugged into the machine and visible to Docker as a serial
+# port: directly on Linux, or through OrbStack 2.2+ on a Mac (see the README).
+services:
+  pictochat:
+    build: .
+    restart: unless-stopped
+    # The container looks for the ESP32-C3 among the machine's serial ports, also when it is plugged in later.
+    # That needs the machine's /dev and the right to open devices. Stricter, for Linux with a /dev/ttyACM* or
+    # /dev/ttyUSB* port: replace `privileged: true` by
+    #   device_cgroup_rules: ["c 166:* rmw", "c 188:* rmw"]
+    privileged: true
+    volumes:
+      - /dev:/dev
+    environment:
+      DASHBOARD_PASSWORD: "${DASHBOARD_PASSWORD:?set DASHBOARD_PASSWORD: the dashboard asks for it}"
+      PICTOCHAT_SERIAL: "${PICTOCHAT_SERIAL:-}"        # empty = find the port
+      PICTOCHAT_CHANNEL: "${PICTOCHAT_CHANNEL:-1}"
+      PICTOCHAT_ROOM: "${PICTOCHAT_ROOM:-0}"
+      PICTOCHAT_NAME: "${PICTOCHAT_NAME:-Home}"
+      PICTOCHAT_TOKEN: "${PICTOCHAT_TOKEN:-}"          # set it to open the API on port 7777 for Home Assistant
+    ports:
+      - "8080:8080"
+      - "7777:7777"

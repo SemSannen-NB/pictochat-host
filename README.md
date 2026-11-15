@@ -1,41 +1,233 @@
-# PictoChat host for  Nintendo DS
+# PictoChat for Home Assistant
 
-Host a PictoChat room from a PC (or a Raspberry Pi). A real DS lists the room, joins it and shows the text, drawings
-and dithered pictures you send. Messages drawn on the DS come back to the PC.
+Use a Nintendo DS as a remote control for your home. Type `lights on` in PictoChat, press send, and Home Assistant
+runs the action you linked to it. Home Assistant can answer: it sends texts and pictures back to the DS, so a doorbell
+or a finished washing machine shows up in the chat room.
 
-- **`pictochat.py`** is the host, written in Python with only the standard library. It also captures and decodes real
-  rooms.
-- **`pictochat_gui.py`** is a window for sending text, drawings and pictures into the room.
-- **`esp32c3_modem/`** is firmware that turns an ESP32-C3 board into the host's radio. This is the easy hardware route:
-  no monitor-mode adapter is needed.
-- **`host_rs/`** is the same host in Rust, for the ESP32 modem on small machines like a Pi Zero.
-- **[`PROTOCOL.md`](PROTOCOL.md)** explains in detail how PictoChat works on the air, with diagrams.
-- **`emu/`** is a headless two-DS emulator test bed, built on the melonDS core.
-- **[`API.md`](API.md)** describes the JSON-lines interface for your own bots and bridges, with a minimal example in
-  `examples/echo_bot.py`.
+- **`dashboard.py`** is a web page in PictoChat style. It shows the room, sends drawings and texts, and flashes the
+  ESP32-C3. It is what the Docker deployment runs.
+- **`pictochat.py`** is the host. It keeps a PictoChat room open for the DS and gives other programs an API.
+- **`custom_components/pictochat/`** is the Home Assistant integration: phrases, actions, entities and services.
+- **`esp32c3_modem/`** is firmware that turns an ESP32-C3 board into the host's radio, and **`firmware/`** is a
+  ready build of it.
+- **`Dockerfile`** and **`docker-compose.yml`** deploy all of it, for example in Coolify.
+- **[`PROTOCOL.md`](PROTOCOL.md)** explains how PictoChat works on the air, and **[`API.md`](API.md)** describes the
+  host's API.
 
-![our host's text and a dithered picture on an emulated DS](emu/screenshots/python_host_text_and_dithered_image.png)
+This is a fork of [LNYmachines/pictochat-host](https://github.com/LNYmachines/pictochat-host), which worked out the
+protocol and wrote the host. The fork adds the Home Assistant integration and the network access it needs.
 
-Measured on a real DS Lite: a one-line text arrives in 0.6 s, a two-line text in 0.8 s and a full-size picture in
-1.2 s.
+**Status:** the host was measured on a real DS Lite by the original project. The dashboard and the integration are
+tested against the host's API with simulated DS messages (the integration in Home Assistant 2026.10, see `tests/`).
+They have not yet run with a real DS and ESP32-C3 from end to end.
 
-## Hardware: pick a radio
+![the host's text and a dithered picture on an emulated DS](emu/screenshots/python_host_text_and_dithered_image.png)
 
-The DS speaks 802.11b at 2 Mbit/s with Nintendo's own multiplay protocol, so the radio must be able to send raw frames
-with a chosen source MAC address.
+## How it fits together
 
 ```mermaid
 flowchart LR
-    DS(["Nintendo DS"]) <-- "802.11b, 2 Mbit/s" --> R
-    subgraph R["radio"]
-        A["USB Wi-Fi adapter<br/>monitor mode + injection"]
-        E["ESP32-C3 board<br/>esp32c3_modem firmware"]
-    end
-    A <-- "raw frames" --> P1["pictochat.py host --iface"]
-    E <-- "USB serial: raw frames" --> P2["pictochat.py host --serial"]
-    E <-- "USB serial: packets only<br/>(ESP32 runs the polling)" --> P3["pictochat.py host --serial --offload<br/>or host_rs (pictochat-host)"]
-    P1 & P2 & P3 <-- "JSON lines on 127.0.0.1:7777" --> G["pictochat_gui.py<br/>(or your own client)"]
+    DS(["Nintendo DS<br/>PictoChat, Chat Room A"]) <-- "802.11b, 2 Mbit/s" --> E["ESP32-C3 board<br/>esp32c3_modem firmware"]
+    E <-- "USB serial" --> H["pictochat.py host<br/>on the machine with the ESP32"]
+    H <--> D["dashboard.py<br/>web page on port 8080"]
+    H <-- "JSON lines on port 7777<br/>with a token" --> I["Home Assistant<br/>PictoChat integration"]
+    I --> A["lights, scenes, scripts,<br/>automations"]
+    I -- "texts and pictures" --> H
 ```
+
+## What you need
+
+- **A Nintendo DS, DS Lite or DSi.** PictoChat is built in.
+- **An ESP32-C3 board with native USB** (a few euros). It is the radio, and there is no way around a radio: a
+  container has none, and a computer's own Wi-Fi cannot do this job. The DS speaks Nintendo's multiplay protocol over
+  802.11b, which needs raw frames with a chosen sender address, and macOS and normal Wi-Fi drivers do not allow that. On Linux a monitor-mode USB adapter also works (see
+  [Other radios](#other-radios)).
+- **A computer with a USB port within a few metres of the DS.** A Mac or any Linux machine. It runs the host.
+- **Home Assistant.** It may run anywhere that can reach the host over the network, including a container on the same
+  machine.
+
+## Setup
+
+### 1. Deploy the dashboard
+
+The repository is one Docker Compose app: a dashboard, the host and a flasher for the ESP32-C3.
+
+- **In Coolify:** add the repository as a **Docker Compose** resource, set the environment variable
+  `DASHBOARD_PASSWORD`, give the service a domain on port 8080 and deploy.
+- **With plain Docker:** `DASHBOARD_PASSWORD=choose-one docker compose up -d --build`, then open
+  `http://<machine>:8080`.
+
+The page asks for the password; any user name works. Plug the ESP32-C3 into the machine that runs Docker.
+
+- **On Linux** the container finds the board by itself.
+- **On a Mac with OrbStack 2.2 or later**, OrbStack forwards serial ports that are plugged into the Mac to Linux
+  ([OrbStack docs: USB devices](https://docs.orbstack.dev/features/usb)). Check with `orb serial list`. If the
+  dashboard still says **No ESP32 found**, hand the board to Linux completely with `orb usb list` and
+  `orb usb attach <id>`. If its port is not named `/dev/ttyACM*` or `/dev/ttyUSB*`, set `PICTOCHAT_SERIAL` to its
+  name. This route is not tested with an ESP32-C3 yet: OrbStack's list of tested serial devices names USB-to-UART
+  chips, not the ESP32-C3's built-in USB port.
+- **Docker Desktop on a Mac** does not pass USB devices to containers. Use the
+  [service without Docker](#without-docker) there.
+- The container runs `privileged` and sees the machine's `/dev`, so that it finds the board whenever it is plugged
+  in. `docker-compose.yml` shows a stricter setting for Linux.
+
+Other settings: `PICTOCHAT_CHANNEL` (1), `PICTOCHAT_ROOM` (0-3 = A-D), `PICTOCHAT_NAME` (the nickname on the DS) and
+`PICTOCHAT_SERIAL`.
+
+### 2. Flash the ESP32-C3 from the dashboard
+
+Press **Flash ESP32** and confirm. The dashboard stops the host, writes the firmware in `firmware/` to the board and
+starts the host again. This is needed once per board.
+
+- If the board does not answer, put it in download mode: hold BOOT, press RESET, release BOOT. Then flash again.
+- `firmware/` holds a build of `esp32c3_modem/`. `firmware/build.sh` rebuilds it in Docker.
+
+### 3. Test from the dashboard
+
+![the dashboard](docs/dashboard.png)
+
+On the DS, open PictoChat and choose **Chat Room A**. Then:
+
+- The pill at the top shows the DS and its signal strength, and the room shows **Now entering**.
+- Messages from the DS appear in the room as you send them.
+- Draw in the box at the bottom or type a text, and press **SEND**. The DS shows it.
+- **Host log** shows what the host does, and **Restart host** starts it again.
+
+### 4. Later: connect Home Assistant
+
+The integration talks to the host's API on port 7777. Set `PICTOCHAT_TOKEN` in the deployment to open that port
+with a token, and deploy again.
+
+- **With HACS:** open HACS, choose **Custom repositories**, add `https://github.com/SemSannen-NB/pictochat-host` as
+  an **Integration**, and install **PictoChat (Nintendo DS)**.
+- **By hand:** copy the folder `custom_components/pictochat` into the `custom_components` folder of your Home
+  Assistant configuration (create it if it does not exist). In a container that is `/config/custom_components/`.
+
+Restart Home Assistant. Then go to **Settings > Devices & services > Add integration**, pick **PictoChat** and enter
+the IP address of the machine that runs the container, port 7777 and the token.
+
+### Teach it your phrases
+
+A DS does not send text. It sends a picture of 256 × 80 pixels, and typed letters are part of that picture. So Home
+Assistant learns each phrase from an example:
+
+1. Type the phrase on the DS, for example `lights on`, and send it.
+2. In Home Assistant, open the PictoChat integration and choose **Configure > Learn a phrase from the last DS
+   message**.
+3. Give it a name and, if you like:
+   - **entities to run it on** (lights, switches, fans, helpers, scripts, scenes, buttons) and whether to toggle them,
+     turn them on or turn them off;
+   - **an answer** that the DS gets back, such as `OK!`.
+4. Send the same message again. The action runs.
+
+Good to know:
+
+- **Typed text is matched exactly.** The DS stamps the same letters as the same pixels, wherever they are in the
+  message. `lights on`, `Lights on` and `lights on!` are three different phrases.
+- **One phrase can have several examples.** Learn a message under a name that already exists to add it, for instance
+  for a second spelling.
+- **Drawings match only roughly.** A drawing never comes out the same twice. To try it, lower **How exactly a message
+  must match** under **Configure > Settings** and teach a few examples of the drawing. Expect misses.
+- **The same message cannot mean two phrases.** Home Assistant refuses to learn it a second time.
+- After a restart or reconnect, old messages are never acted on again.
+
+### Without Docker
+
+**As a service on a Mac.** This runs the host only, without the dashboard:
+
+```
+git clone https://github.com/SemSannen-NB/pictochat-host.git && cd pictochat-host
+deploy/macos/install.sh
+```
+
+- The script installs the host as a background service of your user. It starts at login and restarts when it stops.
+- It prints the **host, port and token** for Home Assistant. They are also in
+  `~/Library/Application Support/pictochat-host/config.env`, together with the channel, the room and the nickname.
+  From a container on the same Mac, the host to enter in Home Assistant is `host.docker.internal`.
+- Errors go to `~/Library/Logs/pictochat-host.log`. Without an ESP32 the service waits and looks again every 15 s.
+- The service runs while your user is logged in. On a server, turn on automatic login.
+- `deploy/macos/install.sh --uninstall` removes the service.
+
+**By hand, on any machine,** with the dashboard:
+
+```
+python3 -m venv .venv && .venv/bin/pip install pyserial esptool
+.venv/bin/python dashboard.py            # then open http://localhost:8080
+```
+
+The settings are the environment variables listed at the top of `dashboard.py`. To run only the host, see
+[`pictochat.py`](#pictochatpy) below.
+
+## What you get in Home Assistant
+
+| Entity | What it shows |
+|---|---|
+| `binary_sensor.pictochat_ds_in_room` | On while a DS is in the room. Attributes: how many, and their nicknames. |
+| `sensor.pictochat_last_phrase` | The phrase that the last message matched, or unknown. Attributes: sender and score. |
+| `image.pictochat_last_message` | The last picture a DS sent, in PictoChat's colours. |
+| `event.pictochat_message` | Fires for every message: `phrase` or `unknown`. |
+| `notify.pictochat_room` | Sends a notification text into the room. |
+| `sensor.pictochat_ds_signal` | Signal strength of the DS (diagnostic). |
+
+**Triggers for automations**
+
+- **Device triggers:** in the automation editor, choose the PictoChat device. It offers one trigger per phrase and
+  one for a message that matched nothing.
+- **Events:** `pictochat_phrase` fires for a recognised phrase and `pictochat_message` for every message. Both carry
+  `phrase`, `sender`, `sender_mac`, `score` and `recognized`.
+
+```yaml
+automation:
+  - alias: "Good night from the DS"
+    trigger:
+      - platform: event
+        event_type: pictochat_phrase
+        event_data:
+          phrase: good night
+    action:
+      - service: scene.turn_on
+        target:
+          entity_id: scene.night
+```
+
+**Actions**
+
+- `pictochat.send_text` sends `message` in ink `color` 1-15. A long text is split over up to three messages.
+- `pictochat.send_image` sends the image file at `path`, fitted to 230 × 64 pixels, with `dither` and `color`
+  options. The path must be inside `allowlist_external_dirs`.
+- `notify.send_message` on `notify.pictochat_room` does the same as `send_text`.
+
+```yaml
+automation:
+  - alias: "Doorbell on the DS"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.doorbell
+        to: "on"
+    action:
+      - service: pictochat.send_text
+        data:
+          message: "Someone is at the door!"
+```
+
+A message sent while no DS is in the room is held by the host until one joins.
+
+## Troubleshooting
+
+- **The dashboard says No ESP32 found.** See step 1 for the Mac. On Linux, check `ls /dev/ttyACM*`.
+- **The host runs but the DS does not see the room** right after plugging in a new board: flash it first (step 2).
+- **The integration cannot connect.** Check that `PICTOCHAT_TOKEN` is set in the deployment, that the port is 7777
+  and that a firewall does not block it.
+- **The token is refused.** Copy it again from `PICTOCHAT_TOKEN`.
+- **The DS does not list the room.** The radio is too far away, or the PictoChat channel is the one your own Wi-Fi
+  uses. Move your own Wi-Fi to another channel first. Room A on channel 1 is the only combination confirmed on a real
+  DS; other values of `PICTOCHAT_CHANNEL` are an experiment.
+- **A phrase does not fire.** Look at `image.pictochat_last_message` and at the score of
+  `sensor.pictochat_last_phrase`. A different capital letter or an extra space at the start makes another picture.
+
+## Other radios
+
+The ESP32-C3 is the route this fork is set up for. The host also works with a monitor-mode Wi-Fi adapter on Linux:
 
 | Radio | Notes |
 |---|---|
@@ -43,41 +235,12 @@ flowchart LR
 | **Nintendo Wi-Fi USB Connector** (Ralink RT2570) | Works as is in monitor mode. About 76 polls/s from Python. |
 | Other monitor-mode adapters | They must inject at **2 Mbit/s**, because the DS ignores polls sent at 1 Mbit/s. Atheros AR9271 (`ath9k_htc`) sends injected frames at 1 Mbit/s unless its firmware is patched. |
 
-## Quick start
+With an adapter, start the host as root with `--iface <wifi-interface>` instead of `--serial ... --offload`. Find the
+interface name with `iw dev`.
 
-You need Python 3 with `venv` and Tk. On Debian, Ubuntu or Mint: `sudo apt install python3-venv python3-tk`.
+## The host and its tools
 
-```
-git clone https://github.com/LNYmachines/pictochat-host.git && cd pictochat-host
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # Pillow and pyserial
-
-# EITHER with a monitor-mode adapter: find its name with `iw dev` (e.g. wlx…); root is needed for the radio
-sudo .venv/bin/python pictochat.py host --iface <wifi-interface> --channel 1 --gui-port 7777
-
-# OR with the ESP32-C3 modem (flash it first, see esp32c3_modem/ below)
-.venv/bin/python pictochat.py host --serial /dev/ttyACM0 --offload --channel 1 --gui-port 7777
-
-# then, in a second terminal, as your normal user:
-.venv/bin/python pictochat_gui.py
-```
-
-- **ESP32 serial port:** opening `/dev/ttyACM0` without root needs the `dialout` group. Run
-  `sudo usermod -aG dialout $USER` once, then log out and back in.
-- **What success looks like:** the host prints a status line every 5 s. When a DS joins, the log shows
-  `# client 1 hello` and then `# client 1 joined`.
-- **No radio yet?** `python3 pictochat.py selftest` checks the frame builders without any hardware and should end
-  with `selftest OK`.
-- **No git** (Raspberry Pi OS Lite ships without it)? Either `sudo apt install git`, or fetch the code with
-  `curl -L https://github.com/LNYmachines/pictochat-host/archive/refs/heads/main.tar.gz | tar xz`.
-- **Headless machine** (a Pi over ssh): `pictochat_gui.py` needs a display. Send from the command line instead with
-  `.venv/bin/python emu/sendchat.py 7777 "text"`, or run a bot such as `examples/echo_bot.py`.
-
-On the DS, open PictoChat and choose Chat Room A. Then, in the window:
-- **Send text** types a message.
-- **Send drawing** sends what you drew on the canvas.
-- **Load image...** loads a picture, and **Send drawing** then sends it.
-
-## The tools
+These come from the original project and work without Home Assistant too.
 
 ### `pictochat.py`
 
@@ -88,7 +251,9 @@ On the DS, open PictoChat and choose Chat Room A. Then, in the window:
     `--hello-repeats` (8, the most copies sent of any packet) and `--no-confirm`. `PROTOCOL.md` section 9 explains the
     delivery rule.
   - ESP32 options: `--offload` and `--mp-period-ms` (7).
-  - Output: `--out` (base name for the log and pcap, default `host_log`), `--all` and `--gui-port 7777`.
+  - Output: `--out` (base name for the log and pcap, default `host_log`; `--out none` writes no files) and `--all`.
+  - API: `--gui-port 7777` opens the JSON-lines API on `127.0.0.1`. `--gui-bind 0.0.0.0` opens it to other machines
+    and then requires `--gui-token TOKEN` (or the `PICTOCHAT_TOKEN` environment variable). See [`API.md`](API.md).
   - Testing: `--bridge PORT --lockstep` (emulator), `--dry-run PCAP` and `--seed`.
   - The log shows each protocol step, every frame from the DS and a status line every 5 s.
 - **`capture`** sniffs a real room. It hops channels until it hears a DS, then writes a pcap and a decoded log. Type a
@@ -109,9 +274,10 @@ On the DS, open PictoChat and choose Chat Room A. Then, in the window:
 - A row of pen colours, with all 15 ink colours.
 - A packet list with a hex dump for each packet. Received drawings are shown as pictures.
 - A command line with `say`, `draw`, `clear`, `pen`, `line`, `raw <port> <hex>`, `image <file>`, `save` and `help`.
-- **The GUI port** is a JSON-lines protocol on `127.0.0.1`. Other programs can use it too, such as a chatbot or a
-  bridge to another room. They receive the room's packets and events, and they send messages. See
-  [`API.md`](API.md).
+- **The GUI port** is a JSON-lines protocol. Other programs use it too: the Home Assistant integration, a chatbot or
+  a bridge to another room. They receive the room's packets and events, and they send messages. See
+  [`API.md`](API.md). If the host has a token, start the GUI with `PICTOCHAT_TOKEN=... .venv/bin/python pictochat_gui.py`.
+- It needs Tk. On Debian, Ubuntu or Mint: `sudo apt install python3-tk`.
 
 ### `esp32c3_modem/` (ESP-IDF 5.4)
 
@@ -126,6 +292,9 @@ cd esp32c3_modem
 idf.py set-target esp32c3            # once
 idf.py build flash -p /dev/ttyACM0
 ```
+
+On macOS the port is `/dev/cu.usbmodem...` (find it with `ls /dev/cu.usbmodem*`) and the same guide covers the
+install.
 
 A board that doesn't flash may need download mode: hold BOOT, press RESET, then release BOOT.
 
@@ -153,6 +322,8 @@ A board that doesn't flash may need download mode: hold BOOT, press RESET, then 
 
 - It has the same JSON-lines GUI port as the Python host, and its packets are byte-for-byte equal to the Python
   builders, which a unit test checks.
+- It does not have `--gui-bind` and `--gui-token` yet, so it serves programs on the same machine only. For Home
+  Assistant on another machine or in a container, use the Python host.
 - It assembles a message only once every byte has arrived.
 - On a Pi Zero 2 W with a DS in the room it uses 0.5 % CPU and 1 MB RAM. The Python host uses 1.7 % and 15 MB.
 - You need Rust: install it with [rustup](https://rustup.rs).
@@ -217,7 +388,15 @@ each other or to our host through a TCP bridge.
 - Logs: `host_log.log` and `host_log.pcap`. Wireshark opens the pcap, and `pictochat.py analyze` decodes it. Captures
   contain the real MAC addresses of your devices, so think twice before publishing them.
 
+## Tests
+
+```
+python3 pictochat.py selftest                       # the host's frame builders, no hardware needed
+python3 -m venv .venv && .venv/bin/pip install pytest-homeassistant-custom-component pillow
+.venv/bin/python -m pytest                          # the integration, in a real Home Assistant, against the host's API
+```
+
 ## License
 
-GPLv3 (see `LICENSE`). `emu/harness.cpp` and `emu/romrun.cpp` link against melonDS, which is GPLv3 as well.
+GPLv3 (see `LICENSE`), like the original project. `emu/harness.cpp` and `emu/romrun.cpp` link against melonDS, which is GPLv3 as well.
 PictoChat and Nintendo DS are trademarks of Nintendo. This project is not affiliated with or endorsed by Nintendo.

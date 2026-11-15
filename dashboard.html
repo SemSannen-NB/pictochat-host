@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PictoChat dashboard</title>
+<style>
+  :root { --ink:#1b1b1b; --paper:#fbfbfb; --rule:#c9d3e6; --frame:#7b8394; --shell:#d9dce3; --bg:#eef0f4;
+          --mine:#3d6fd6; --theirs:#d6453d; --soft:#5d6472; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 "Trebuchet MS", Verdana, sans-serif;
+         background-image:repeating-linear-gradient(0deg, transparent 0 7px, #e4e7ee 7px 8px); }
+  main { max-width:540px; margin:0 auto; padding:12px 16px 32px; }
+  h1 { font-size:15px; margin:4px 0 10px; letter-spacing:.04em; display:flex; align-items:center; gap:8px; }
+  h1 b { background:var(--ink); color:#fff; padding:1px 7px; border-radius:3px; }
+  .pills { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .pill { background:#fff; border:2px solid var(--frame); border-radius:999px; padding:2px 10px; font-size:12px; }
+  .pill i { display:inline-block; width:8px; height:8px; border-radius:50%; background:#aaa; margin-right:6px; }
+  .pill.ok i { background:#2fb344; } .pill.bad i { background:#e03131; } .pill.wait i { background:#f0a000; }
+  .warn { background:#fff4d6; border:2px solid #f0a000; border-radius:6px; padding:6px 10px; margin-bottom:10px;
+          font-size:12px; }
+  .screen { background:var(--shell); border:3px solid var(--frame); border-radius:10px; padding:8px; }
+  .screen + .screen { margin-top:10px; }
+  .label { font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--soft); margin:0 2px 5px; }
+
+  /* top screen: the room */
+  #room { height:340px; overflow-y:auto; background:#aeb6c6; border:2px solid var(--frame); border-radius:6px;
+          padding:6px; display:flex; flex-direction:column; gap:5px; }
+  .sys { background:#3a3f4b; color:#fff; border-radius:5px; padding:2px 9px; font-size:12px; }
+  .sys b { color:#ffd866; font-weight:normal; }
+  .msg { position:relative; background:var(--paper); border:2px solid var(--c); border-radius:7px; overflow:hidden;
+         flex:none; }
+  .msg canvas { display:block; width:100%; image-rendering:pixelated; image-rendering:crisp-edges; }
+  .tab { position:absolute; left:0; top:0; background:var(--c); color:#fff; font-size:11px; line-height:1;
+         padding:3px 8px 4px 6px; border-bottom-right-radius:7px; max-width:25%; white-space:nowrap; overflow:hidden; }
+  .empty { margin:auto; color:#fff; text-align:center; font-size:13px; padding:20px; }
+
+  /* bottom screen: write a message */
+  .compose { display:flex; gap:6px; }
+  .tools, .acts { display:flex; flex-direction:column; gap:5px; flex:none; }
+  button { font:inherit; border:2px solid var(--frame); border-radius:6px; background:#fff; color:var(--ink);
+           padding:5px 8px; cursor:pointer; }
+  button:hover { background:#f1f4fb; } button:active { transform:translateY(1px); }
+  button[aria-pressed=true] { background:var(--ink); color:#fff; border-color:var(--ink); }
+  button:disabled { opacity:.5; cursor:default; }
+  .tools button { width:38px; height:34px; padding:0; font-size:16px; }
+  .acts button { width:64px; flex:1; font-weight:bold; font-size:12px; letter-spacing:.05em; }
+  #send { background:var(--mine); border-color:var(--mine); color:#fff; }
+  .sheet { position:relative; flex:1; min-width:0; border:2px solid var(--mine); border-radius:7px; overflow:hidden;
+           background:var(--paper); --c:var(--mine); }
+  #pad { display:block; width:100%; image-rendering:pixelated; image-rendering:crisp-edges; touch-action:none;
+         cursor:crosshair; }
+  #text { width:100%; margin-top:6px; font:inherit; padding:7px 9px; border:2px solid var(--frame); border-radius:6px; }
+  .hint { font-size:12px; color:var(--soft); margin:5px 2px 0; }
+
+  .row { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; }
+  details { margin-top:10px; } summary { cursor:pointer; font-size:12px; color:var(--soft); }
+  pre { background:#1e2129; color:#d7dbe4; border-radius:6px; padding:8px; margin:6px 0 0; font:11px/1.45 ui-monospace,
+        Menlo, Consolas, monospace; max-height:220px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  dialog { border:3px solid var(--frame); border-radius:10px; padding:14px; width:min(500px, calc(100vw - 32px)); }
+  dialog::backdrop { background:rgba(20,24,34,.5); }
+  dialog h2 { font-size:15px; margin:0 0 8px; } dialog p { margin:0 0 8px; }
+  dialog .row { justify-content:flex-end; }
+</style>
+</head>
+<body>
+<main>
+  <h1><b>PictoChat</b> dashboard</h1>
+  <div class="pills">
+    <span class="pill wait" id="p-radio"><i></i><span>Radio …</span></span>
+    <span class="pill wait" id="p-host"><i></i><span>Host …</span></span>
+    <span class="pill" id="p-ds"><i></i><span>No DS in the room</span></span>
+  </div>
+  <div class="warn" id="nopass" hidden>No password is set. Anyone who can open this page can send messages and flash
+    the ESP32. Set <code>DASHBOARD_PASSWORD</code> if the page is reachable from the internet.</div>
+
+  <section class="screen">
+    <div class="label" id="roomname">Chat Room A</div>
+    <div id="room"><div class="empty" id="empty">No messages yet.<br>On the DS: open PictoChat and join Chat Room A.</div></div>
+  </section>
+
+  <section class="screen">
+    <div class="compose">
+      <div class="tools">
+        <button id="t-pen" aria-pressed="true" title="Pen">✎</button>
+        <button id="t-erase" aria-pressed="false" title="Eraser">▱</button>
+        <button id="t-thick" aria-pressed="false" title="Thick or thin line">●</button>
+      </div>
+      <div class="sheet"><canvas id="pad" width="230" height="80"></canvas><span class="tab" id="mytab">Home</span></div>
+      <div class="acts">
+        <button id="send">SEND</button>
+        <button id="clear">CLEAR</button>
+      </div>
+    </div>
+    <input id="text" placeholder="Type a message, or draw above. Enter sends." maxlength="200" autocomplete="off">
+    <div class="hint" id="hint">&nbsp;</div>
+  </section>
+
+  <div class="row">
+    <button id="flash">Flash ESP32</button>
+    <button id="restart">Restart host</button>
+  </div>
+  <details><summary>Host log</summary><pre id="log"></pre></details>
+</main>
+
+<dialog id="dlg">
+  <h2>Flash the ESP32-C3</h2>
+  <div id="ask">
+    <p>This writes the PictoChat modem firmware to the ESP32-C3 that is plugged into the server. The room is closed
+      while it runs, about half a minute.</p>
+    <div class="row"><button id="cancel">Cancel</button><button id="go">Flash now</button></div>
+  </div>
+  <div id="run" hidden>
+    <pre id="out"></pre>
+    <div class="row"><button id="close" disabled>Close</button></div>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const W = 256, H = 80, X0 = 23, VW = 230;           // a picture is 256 x 80; a DS shows columns 23-252
+const TAB_X = 80, TAB_Y = 15;                       // the name tab covers columns 0-80 of rows 0-15
+const PALETTE = ["#fbfbfb","#000000","#d3cbc3","#eb00eb","#fb008a","#fb0028","#fb4900","#fba200","#e3f300","#82fb00",
+                 "#10fb20","#00fbba","#00c3fb","#0079fb","#0030fb","#2800fb"];
+// the 16 favourite colours a DS user can pick, for the name tabs
+const FAVOURITE = ["#61829a","#ba4900","#fb0018","#fb8afb","#fb9200","#f3e300","#aafb00","#00fb00","#00a238","#49db8a",
+                   "#30baf3","#0059f3","#000092","#8a00d3","#d300eb","#fb0092"];
+const RGB = PALETTE.map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)));
+
+// ---------------------------------------------------------------- the room
+const names = {}, colours = {};
+let myName = "Home", lastEnter = "", lastState = {offline: true};
+
+function addToRoom(el) {
+  const room = $("room"), atEnd = room.scrollHeight - room.scrollTop - room.clientHeight < 60;
+  $("empty").hidden = true;
+  room.appendChild(el);
+  while (room.children.length > 120) room.removeChild(room.children[1]);
+  if (atEnd) room.scrollTop = room.scrollHeight;
+}
+
+function system(html) {
+  const d = document.createElement("div");
+  d.className = "sys"; d.innerHTML = html;
+  addToRoom(d);
+}
+
+function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+function bytes(hex) {
+  const b = new Uint8Array(hex.length >> 1);
+  for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return b;
+}
+
+function onMessage(ev) {
+  const b = bytes(ev.hex || ""), mac = (ev.hex || "").slice(4, 16);
+  if (b[0] !== 3) return;
+  if (b[1] < 2 && b.length >= 28) {                 // member message: nickname in UTF-16LE, colour near the end
+    let name = "";
+    for (let i = 8; i < 28; i += 2) { const c = b[i] | b[i + 1] << 8; if (!c) break; name += String.fromCharCode(c); }
+    names[mac] = name;
+    colours[mac] = FAVOURITE[(b[b.length - 4] | b[b.length - 3] << 8) & 15];
+    if (ev.dir === "rx" && lastEnter !== mac + name) {
+      lastEnter = mac + name;
+      system("Now entering: <b>" + escapeHtml(name) + "</b>");
+    }
+    onState(lastState);                             // the pill shows nicknames
+    return;
+  }
+  if (b[1] !== 2 || b.length < 36 + 2048) return;   // chat picture: 1-5 lines of 2048 bytes, 8x8 tiles, 4 bits a pixel
+  const data = b.subarray(36), lines = Math.min(5, Math.floor(data.length / 2048));
+  const cv = document.createElement("canvas");
+  cv.width = VW; cv.height = lines * 16;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(VW, lines * 16);
+  for (let t = 0; t < lines * 64; t++) {
+    const tx = t % 32, ty = t >> 5;
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      const v = data[t * 32 + y * 4 + (x >> 1)], p = x & 1 ? v >> 4 : v & 15, px = tx * 8 + x - X0, py = ty * 8 + y;
+      if (px < 0 || px >= VW) continue;
+      const rule = py % 16 === 15 ? [201, 211, 230] : RGB[0], c = p ? RGB[p] : rule, o = (py * VW + px) * 4;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const mine = ev.dir === "tx", box = document.createElement("div"), tab = document.createElement("span");
+  box.className = "msg";
+  box.style.setProperty("--c", mine ? "var(--mine)" : colours[mac] || "var(--theirs)");
+  tab.className = "tab"; tab.textContent = mine ? myName : names[mac] || "DS";
+  box.append(cv, tab);
+  addToRoom(box);
+}
+
+function pill(id, cls, text) { $(id).className = "pill " + cls; $(id).lastElementChild.textContent = text; }
+
+function onState(ev) {
+  lastState = ev;
+  const macs = Object.keys(ev.aids || {});
+  if (ev.offline || !macs.length) return pill("p-ds", "", "No DS in the room");
+  const who = macs.map(m => {
+    const swapped = m.split(":").map((x, i, a) => a[i ^ 1]).join("");      // the room stores MACs pair-swapped
+    return names[swapped] || "DS";
+  });
+  const dbm = macs.map(m => (ev.rssi || {})[m]).filter(Boolean).map(r => Math.round(r[1]) + " dBm");
+  pill("p-ds", "ok", who.join(", ") + " in the room" + (dbm.length ? " · " + dbm.join(", ") : ""));
+}
+
+function onStatus(ev) {
+  myName = ev.name || "Home"; $("mytab").textContent = myName;
+  $("roomname").textContent = "Chat Room " + "ABCD"[ev.room || 0];
+  $("nopass").hidden = !!ev.password;
+  $("flash").disabled = !ev.firmware || ev.host === "external" || ev.host === "flashing";
+  $("restart").disabled = ev.host !== "running";
+  pill("p-radio", ev.port ? "ok" : ev.host === "external" ? "" : "bad", ev.port ? "Radio " + ev.port :
+       ev.host === "external" ? "Radio: see host" : "No ESP32 found");
+  const label = {running: ["ok", "Host running"], starting: ["wait", "Host starting"], external: ["ok", "Host external"],
+                 flashing: ["wait", "Flashing…"], no_radio: ["bad", "Host waiting for the ESP32"],
+                 stopped: ["bad", "Host stopped, retrying"]}[ev.host] || ["wait", ev.host];
+  pill("p-host", label[0], label[1]);
+  $("p-host").title = ev.detail || "";
+}
+
+function onLog(ev) {
+  const log = $("log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 30;
+  log.textContent += ev.text + "\n";
+  if (log.textContent.length > 40000) log.textContent = log.textContent.slice(-30000);
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+
+function onFlash(ev) {
+  const out = $("out");
+  if (out.dataset.progress) out.textContent = out.textContent.slice(0, -out.dataset.progress);
+  out.dataset.progress = ev.progress ? ev.text.length : "";
+  out.textContent += ev.text; out.scrollTop = out.scrollHeight;
+  if (ev.done) $("close").disabled = false;
+}
+
+function connect() {
+  const es = new EventSource("events");
+  es.onmessage = m => {
+    const ev = JSON.parse(m.data);
+    if (ev.kind === "reset") {
+      [...$("room").children].forEach(c => c.id !== "empty" && c.remove());
+      $("empty").hidden = false; $("log").textContent = ""; lastEnter = "";
+    } else if (ev.kind === "message") onMessage(ev);
+    else if (ev.kind === "state") onState(ev);
+    else if (ev.kind === "status") onStatus(ev);
+    else if (ev.kind === "log") onLog(ev);
+    else if (ev.kind === "flash") onFlash(ev);
+  };
+  es.onerror = () => pill("p-host", "bad", "Dashboard not reachable, retrying");
+}
+
+// ---------------------------------------------------------------- writing a message
+const pad = $("pad"), pctx = pad.getContext("2d", {willReadFrequently: true});
+const ink = new Uint8Array(W * H);                  // what was drawn; typed text is laid over it
+const scratch = Object.assign(document.createElement("canvas"), {width: W, height: H}).getContext("2d",
+                {willReadFrequently: true});
+let tool = "pen", thick = false, textInk = new Uint8Array(W * H);
+
+const blocked = (x, y) => x < X0 || x > 252 || (x <= TAB_X && y <= TAB_Y) || y < 0 || y >= H;
+
+function typeset(text) {
+  // like the DS keyboard: the first line starts right of the name tab, the next ones at the left edge
+  scratch.clearRect(0, 0, W, H);
+  scratch.font = "12px Verdana, Geneva, sans-serif"; scratch.fillStyle = "#000"; scratch.textBaseline = "alphabetic";
+  let line = 0, x = TAB_X + 5, cur = "", cut = false;
+  const flush = () => { scratch.fillText(cur, x, line * 16 + 12); line++; x = 26; cur = ""; };
+  for (const word of text.split(" ")) {
+    const trial = cur ? cur + " " + word : word;
+    if (scratch.measureText(trial).width <= 250 - x || !cur) cur = trial;
+    else { flush(); if (line > 4) { cut = true; cur = ""; break; } cur = word; }
+  }
+  if (cur && line <= 4) flush(); else if (cur) cut = true;
+  const a = scratch.getImageData(0, 0, W, H).data, out = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) if (a[i * 4 + 3] > 110 && !blocked(i % W, (i / W) | 0)) out[i] = 1;
+  $("hint").textContent = cut ? "The text is too long for one message: the end is cut off." : " ";
+  return out;
+}
+
+function paint() {
+  const img = pctx.createImageData(VW, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < VW; x++) {
+    const i = y * W + x + X0, on = ink[i] || textInk[i], o = (y * VW + x) * 4;
+    const c = on ? RGB[1] : y % 16 === 15 ? [201, 211, 230] : RGB[0];
+    img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+  }
+  pctx.putImageData(img, 0, 0);
+}
+
+function dot(x, y) {
+  const r = tool === "erase" ? 3 : thick ? 1 : 0;
+  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++)
+    if (!blocked(x + dx, y + dy)) ink[(y + dy) * W + x + dx] = tool === "erase" ? 0 : 1;
+}
+
+function stroke(x0, y0, x1, y1) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+  for (let i = 0; i <= n; i++) dot(Math.round(x0 + (x1 - x0) * i / n), Math.round(y0 + (y1 - y0) * i / n));
+}
+
+let last = null;
+const at = e => { const r = pad.getBoundingClientRect();
+  return [Math.floor((e.clientX - r.left) * VW / r.width) + X0, Math.floor((e.clientY - r.top) * H / r.height)]; };
+pad.addEventListener("pointerdown", e => { pad.setPointerCapture(e.pointerId); last = at(e); stroke(...last, ...last); paint(); });
+pad.addEventListener("pointermove", e => { if (!last) return; const p = at(e); stroke(...last, ...p); last = p; paint(); });
+pad.addEventListener("pointerup", () => { last = null; });
+pad.addEventListener("pointercancel", () => { last = null; });
+
+function setTool(t) { tool = t; $("t-pen").setAttribute("aria-pressed", t === "pen"); $("t-erase").setAttribute("aria-pressed", t === "erase"); }
+$("t-pen").onclick = () => setTool("pen");
+$("t-erase").onclick = () => setTool("erase");
+$("t-thick").onclick = e => { thick = !thick; e.currentTarget.setAttribute("aria-pressed", thick); };
+$("text").addEventListener("input", e => { textInk = typeset(e.target.value); paint(); });
+$("text").addEventListener("keydown", e => { if (e.key === "Enter") send(); });
+
+function clearPad() { ink.fill(0); textInk.fill(0); $("text").value = ""; $("hint").textContent = " "; paint(); }
+$("clear").onclick = clearPad;
+
+const post = (path, body) => fetch(path, {method: "POST", headers: {"Content-Type": "application/json", "X-Dashboard": "1"},
+                                          body: JSON.stringify(body || {})});
+
+async function send() {
+  const rows = [];
+  let any = false;
+  for (let y = 0; y < H; y++) {
+    const row = new Array(W);
+    for (let x = 0; x < W; x++) { row[x] = ink[y * W + x] || textInk[y * W + x] ? 1 : 0; any = any || row[x]; }
+    rows.push(row);
+  }
+  if (!any) { $("hint").textContent = "Draw or type something first."; return; }
+  $("send").disabled = true;
+  try {
+    const r = await post("api/send", {pixels: rows});
+    if (r.ok) clearPad(); else $("hint").textContent = "Not sent: " + await r.text();
+  } catch (e) { $("hint").textContent = "Not sent: the dashboard is not reachable."; }
+  $("send").disabled = false;
+}
+$("send").onclick = send;
+
+// ---------------------------------------------------------------- flashing and restarting
+$("flash").onclick = () => { $("ask").hidden = false; $("run").hidden = true; $("dlg").showModal(); };
+$("cancel").onclick = () => $("dlg").close();
+$("close").onclick = () => $("dlg").close();
+$("go").onclick = async () => {
+  $("ask").hidden = true; $("run").hidden = false; $("close").disabled = true;
+  $("out").textContent = ""; $("out").dataset.progress = "";
+  const r = await post("api/flash").catch(() => null);
+  if (!r || !r.ok) onFlash({text: r ? await r.text() : "The dashboard is not reachable.", done: true});
+};
+$("restart").onclick = () => post("api/restart");
+
+paint();
+connect();
+</script>
+</body>
+</html>

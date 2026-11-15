@@ -1,4 +1,4 @@
 # The host needs only the Python 3 standard library (and root for a monitor-mode adapter).
-pillow       # optional: text rendering and image import in pictochat_gui.py
-pyserial     # optional: ESP32-C3 modem (--serial)
-# tkinter for pictochat_gui.py: system package python3-tk
+pyserial>=3.5   # ESP32-C3 modem (--serial); the dashboard's host uses it
+pillow>=12.0    # optional: text rendering and image import in pictochat_gui.py
+# esptool>=5.6 for the dashboard's "Flash ESP32" button; tkinter for pictochat_gui.py: system package python3-tk

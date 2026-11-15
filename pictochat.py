@@ -27,6 +27,7 @@ host:
 """
 
 import argparse
+import hmac
 import json
 import os
 import queue
@@ -40,7 +41,7 @@ import threading
 import time
 from collections import Counter, defaultdict
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def build_commit(script=__file__):
@@ -1217,33 +1218,68 @@ class SerialSock:
 
 
 class GuiBridge:
-    """Localhost JSON-lines link between `host` (root) and pictochat_gui.py (normal user).
+    """JSON-lines link between `host` and its clients: pictochat_gui.py, bots, the Home Assistant integration.
 
-    host -> gui: {"kind": "log"|"rx"|"tx"|"message"|"state", ...}; gui -> host: {"cmd": ...} (see handle_gui_cmd).
-    Listens on 127.0.0.1 only."""
+    host -> client: {"kind": "log"|"rx"|"tx"|"message"|"state"|"ready", ...}; client -> host: {"cmd": ...} (see
+    handle_gui_cmd). Listens on 127.0.0.1 unless `bind` says otherwise. With a `token`, a client's first line must be
+    {"cmd":"auth","token":"..."}; until then it receives nothing and its commands are ignored."""
 
-    def __init__(self, port, cmdq):
+    def __init__(self, port, cmdq, bind="127.0.0.1", token="", clock=time.time):
         self.cmdq = cmdq
+        self.token = token
+        self.clock = clock
         self.clients = []
-        self.history = []          # replayed to a GUI that connects late
+        self.history = []          # replayed to a client that connects late
         self.lock = threading.Lock()
         srv = socket.socket()
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", port))
-        srv.listen(2)
+        srv.bind((bind, port))
+        srv.listen(8)
         threading.Thread(target=self._accept, args=(srv,), daemon=True).start()
 
     def _accept(self, srv):
         while True:
             c, _ = srv.accept()
-            wl = threading.Lock()
-            wl.acquire()                                 # held by the replay until the backlog is out
-            with self.lock:
-                backlog = b"".join((json.dumps(o) + "\n").encode() for o in self.history)
-                self.clients.append((c, wl))
-            # replay outside the lock, so a client that does not read can never stall the host
-            threading.Thread(target=self._replay, args=(c, wl, backlog), daemon=True).start()
-            threading.Thread(target=self._read, args=(c,), daemon=True).start()
+            threading.Thread(target=self._serve, args=(c,), daemon=True).start()
+
+    def _serve(self, c):
+        buf = b""
+        if self.token:
+            buf = self._auth(c)
+            if buf is None:
+                try:
+                    c.sendall(b'{"kind":"error","text":"authentication failed"}\n')
+                except OSError:
+                    pass
+                c.close()
+                return
+        wl = threading.Lock()
+        wl.acquire()                                 # held by the replay until the backlog is out
+        with self.lock:
+            # "ready" ends the replay: everything a client reads before it is history, everything after it is live
+            ready = {"kind": "ready", "t": self.clock(), "version": __version__}
+            backlog = b"".join((json.dumps(o) + "\n").encode() for o in self.history + [ready])
+            self.clients.append((c, wl))
+        # replay outside the lock, so a client that does not read can never stall the host
+        threading.Thread(target=self._replay, args=(c, wl, backlog), daemon=True).start()
+        self._read(c, buf)
+
+    def _auth(self, c):
+        """Reads the first line and checks the token. Returns the bytes that followed that line, or None."""
+        buf = b""
+        c.settimeout(10)
+        try:
+            while b"\n" not in buf:
+                d = c.recv(4096)
+                if not d or len(buf) > 4096:
+                    return None
+                buf += d
+            line, rest = buf.split(b"\n", 1)
+            o = json.loads(line)
+            given = str(o.get("token", "")) if isinstance(o, dict) and o.get("cmd") == "auth" else ""
+        except (OSError, ValueError):
+            return None
+        return rest if hmac.compare_digest(given.encode(), self.token.encode()) else None
 
     def _replay(self, c, wl, backlog):
         try:
@@ -1252,21 +1288,25 @@ class GuiBridge:
             pass
         wl.release()
 
-    def _read(self, c):
-        buf = b""
+    def _read(self, c, buf=b""):
         c.settimeout(None)
         try:
             while True:
-                d = c.recv(4096)
-                if not d:
-                    break
-                buf += d
+                if b"\n" not in buf:
+                    d = c.recv(4096)
+                    if not d:
+                        break
+                    buf += d
+                    if len(buf) > 1 << 20:      # no command is this long: a client that floods is dropped
+                        break
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     try:
-                        self.cmdq.put(json.loads(line))
+                        o = json.loads(line)
                     except ValueError:
-                        pass
+                        continue
+                    if not (isinstance(o, dict) and o.get("cmd") == "auth"):    # auth is handled in _serve
+                        self.cmdq.put(o)
         except OSError:
             pass
         with self.lock:
@@ -1355,6 +1395,9 @@ def handle_gui_cmd(c, args, ml, src, emit, gui):
 
 
 def host(args):
+    if args.gui_port and args.gui_bind not in ("127.0.0.1", "localhost", "::1") and not args.gui_token:
+        sys.exit("--gui-bind %s opens the API to other machines: set a token with --gui-token or the "
+                 "PICTOCHAT_TOKEN environment variable" % args.gui_bind)
     src = bytes.fromhex(args.mac.replace(":", ""))
     if len(src) != 6 or src[0] & 1:
         sys.exit("--mac must be a 6-byte unicast address")
@@ -1386,13 +1429,19 @@ def host(args):
         if not set_channel(args.iface, args.channel):
             sys.exit("could not set channel %d" % args.channel)
         sock = open_sock(args.iface)
-    pcap = open(args.out + ".pcap", "wb")
+    nofiles = args.out in ("", "none")              # a service that runs for months must not grow a log and a pcap
+    pcap = open(os.devnull if nofiles else args.out + ".pcap", "wb")
     pcap.write(pcap_header(127))
-    logf = open(args.out + ".log", "w")
+    logf = open(os.devnull if nofiles else args.out + ".log", "w")
     t0 = time.time()
 
     cmdq = queue.Queue()
-    bridge = GuiBridge(args.gui_port, cmdq) if args.gui_port else None
+    bridge = None
+    if args.gui_port:
+        try:
+            bridge = GuiBridge(args.gui_port, cmdq, args.gui_bind, args.gui_token, lambda: time.time() - t0)
+        except OSError as e:
+            sys.exit("cannot listen on %s:%d: %s" % (args.gui_bind, args.gui_port, e))
 
     def emit(msg):
         line = "%9.3f %s" % (time.time() - t0, msg)
@@ -1821,7 +1870,7 @@ def main():
     h.add_argument("--count", type=int, help="stop after N beacons")
     h.add_argument("--dry-run", metavar="PCAP", help="write the beacons to a pcap instead of transmitting")
     h.add_argument("--no-setup", action="store_true")
-    h.add_argument("--out", default="host_log", help="log/pcap basename (default host_log)")
+    h.add_argument("--out", default="host_log", help="log/pcap basename (default host_log); 'none' writes no files")
     h.add_argument("--all", action="store_true", help="log every frame heard, not just DS-related ones")
     h.add_argument("--mp-period-ms", type=float, default=7.0, help="with --offload: interval between polls on the ESP32. Real DS, 15 s per step: 20 ms 92%% answered, 10 ms 96%%, 7 ms 91%%, 5 ms 79%%; a full drawing took 2.2 s at 7 ms (5.8 s with polling from Python). 2.5 ms: the DS stopped answering and a Pi next to the ESP32 lost Wi-Fi")
     h.add_argument("--offload", action="store_true", help="with --serial and the offload firmware: run the poll / reply / ACK loop on the ESP32 (see --mp-period-ms)")
@@ -1834,7 +1883,9 @@ def main():
     h.add_argument("--serial", metavar="TTY", help="use the ESP32-C3 radio modem (esp32c3_modem/) on this serial "
                    "port, e.g. /dev/ttyACM0, instead of a monitor-mode adapter (no root needed)")
     h.add_argument("--bridge", type=int, default=0, help="TEST: connect to the melonDS harness on 127.0.0.1:PORT instead of a radio")
-    h.add_argument("--gui-port", type=int, default=0, help="listen on 127.0.0.1:PORT for pictochat_gui.py (0 = off)")
+    h.add_argument("--gui-port", type=int, default=0, help="listen on 127.0.0.1:PORT for pictochat_gui.py, bots and Home Assistant (0 = off)")
+    h.add_argument("--gui-bind", default="127.0.0.1", metavar="ADDR", help="address the API port listens on; 0.0.0.0 lets other machines (Home Assistant) connect and requires a token")
+    h.add_argument("--gui-token", default=os.environ.get("PICTOCHAT_TOKEN", ""), metavar="TOKEN", help="shared secret a client must send first ({\"cmd\":\"auth\",\"token\":...}); default: $PICTOCHAT_TOKEN")
     h.add_argument("--echo", action="store_true", help="(obsolete, ignored) EXPERIMENT: echo the DS's port 0xE message fragments back (the first real run froze/crashed the DS's PictoChat)")
     h.add_argument("--announce", action="store_true", help="(obsolete, ignored) EXPERIMENT: after the port 0xD handshake send a host join message (id 0, same layout as the DS's own) on port 0xE")
     h.add_argument("--name", default="py", help="host nickname shown in the room (UTF-16, max 10 chars)")

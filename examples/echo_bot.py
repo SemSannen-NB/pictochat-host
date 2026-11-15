@@ -28,6 +28,8 @@ def send(obj):
     sock.sendall((json.dumps(obj) + "\n").encode())
 
 
+if os.environ.get("PICTOCHAT_TOKEN"):               # host started with --gui-token: authenticate first
+    send({"cmd": "auth", "token": os.environ["PICTOCHAT_TOKEN"]})
 send({"cmd": "set_name", "name": "echo-bot"})
 buf = b""
 while True:

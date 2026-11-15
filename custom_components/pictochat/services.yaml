@@ -1,0 +1,30 @@
+send_text:
+  fields:
+    message:
+      required: true
+      example: "Dinner is ready!"
+      selector:
+        text:
+          multiline: true
+    color:
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 15
+          mode: box
+send_image:
+  fields:
+    path:
+      required: true
+      example: "/config/www/snapshot.jpg"
+      selector:
+        text:
+    dither:
+      default: true
+      selector:
+        boolean:
+    color:
+      default: false
+      selector:
+        boolean:

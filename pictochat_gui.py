@@ -30,6 +30,7 @@ Commands (command line at the bottom; also Enter):
 """
 import argparse
 import json
+import os
 import queue
 import socket
 import struct
@@ -409,6 +410,8 @@ class App:
                 time.sleep(1.0)
                 continue
             s.settimeout(None)
+            if os.environ.get("PICTOCHAT_TOKEN"):           # host started with --gui-token
+                s.sendall((json.dumps({"cmd": "auth", "token": os.environ["PICTOCHAT_TOKEN"]}) + "\n").encode())
             self.sock = s
             self.q.put({"kind": "conn", "ok": True})
             buf = b""
