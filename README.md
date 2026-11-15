@@ -80,6 +80,8 @@ Press **Flash ESP32** and confirm. The dashboard stops the host, writes the firm
 starts the host again. This is needed once per board.
 
 - If the board does not answer, put it in download mode: hold BOOT, press RESET, release BOOT. Then flash again.
+- **Seeed Studio XIAO ESP32C3:** it works as it is, through its USB-C port. Connect the small antenna that comes
+  with it, or the DS will hardly hear it. Its two buttons are tiny and marked **B** (BOOT) and **R** (RESET).
 - `firmware/` holds a build of `esp32c3_modem/`. `firmware/build.sh` rebuilds it in Docker.
 
 ### 3. Test from the dashboard
